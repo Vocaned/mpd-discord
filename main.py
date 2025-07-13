@@ -5,17 +5,16 @@ import struct
 import json
 import time
 import subprocess
+from pathlib import Path
 from uuid import uuid4
 
 CLIENT_ID = '1031137720317263873'
 
 class IPC(socket.socket):
-    IPC_PATH = f'/run/user/{os.getuid()}/discord-ipc-0'
-
-    def __init__(self, client_id: str) -> None:
+    def __init__(self, socket_path: str, client_id: str) -> None:
         self.CLIENT_ID = client_id
         super().__init__(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.connect(self.IPC_PATH)
+        self.connect(socket_path)
 
     def ipc_connect(self) -> dict:
         self.ipc_write(0, {'v': 1, 'client_id': self.CLIENT_ID})
@@ -67,8 +66,15 @@ def run(*cmd: str) -> dict | None:
 def get_socket() -> IPC:
     while True:
         try:
-            return IPC(CLIENT_ID)
-        except ConnectionRefusedError:
+            p = Path(os.getenv('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
+            for socket in p.glob('discord-ipc-*'):
+                return IPC(str(socket), CLIENT_ID)
+
+            for socket in p.glob('/app/com.discordapp.Discord/discord-ipc-*'):
+                return IPC(str(socket), CLIENT_ID)
+
+            raise RuntimeError
+        except ConnectionRefusedError or RuntimeError:
             print('Discord socket not running, trying again in 30 seconds')
             time.sleep(30)
 
