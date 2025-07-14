@@ -92,39 +92,45 @@ def main():
             while True:
                 status = run('rmpc', 'status')
                 song = run('rmpc', 'song')
-                if not status or not song or status.get('state') != 'Play':
+                if not status or not song or status.get('state') != 'Play' or not song.get('metadata'):
                     s.ipc_activity(None)
                     time.sleep(5)
                     continue
 
+                metadata = song['metadata']
+
                 time_start = int(time.time()) - int(status['elapsed']['secs'])
                 time_end = time_start + int(status['duration']['secs'])
 
-                artist = song['metadata'].get('albumartist') or song['metadata'].get('artist')
-                artistid = song['metadata'].get('musicbrainz_albumartistid') or song['metadata'].get('musicbrainz_artistid')
-                track = song['metadata'].get('title')
-                trackid = song['metadata'].get('musicbrainz_trackid')
-                album = song['metadata'].get('album')
-                albumid = song['metadata'].get('musicbrainz_albumid')
+                meta = {
+                    'artist': metadata.get('albumartist') or metadata.get('artist'),
+                    'artistid': metadata.get('musicbrainz_albumartistid') or metadata.get('musicbrainz_artistid'),
+                    'track': metadata.get('title'),
+                    'trackid': metadata.get('musicbrainz_trackid'),
+                    'album': metadata.get('album'),
+                    'albumid': metadata.get('musicbrainz_albumid'),
+                }
+
+                # Filter metadata to only use the first tag in case multiple are present
+                meta = {k: (lambda x: x[0] if isinstance(x, list) else x)(v) for k, v in meta.items()}
 
                 _, data = s.ipc_activity(clean_dict({
                     'status_display_type': 1,
                     'type': 2,
                     'flags': 1,
-                    'state': artist if artist else None,
-                    'state_url': f'https://musicbrainz.org/artist/{artistid}' if artistid else None,
-                    'details': track if track else None,
-                    'details_url': f'https://musicbrainz.org/track/{trackid}' if trackid else None,
+                    'state': meta['artist'],
+                    'state_url': f'https://musicbrainz.org/artist/{meta["artistid"]}' if meta['artistid'] else None,
+                    'details': meta['track'],
+                    'details_url': f'https://musicbrainz.org/track/{meta["trackid"]}' if meta['trackid'] else None,
                     'timestamps': {
                         'start': time_start * 1000,
                         'end': time_end * 1000
                     },
                     'assets': {
-                        'large_image': f'https://coverartarchive.org/release/{albumid}/front' if albumid else None,
-                        'large_text': album if album else None,
-                        'large_url': f'https://musicbrainz.org/release/{albumid}' if albumid else None
-                    },
-                    'sync_id': trackid
+                        'large_image': f'https://coverartarchive.org/release/{meta["albumid"]}/front' if meta['albumid'] else None,
+                        'large_text': meta['album'],
+                        'large_url': f'https://musicbrainz.org/release/{meta["albumid"]}' if meta['albumid'] else None
+                    }
                 }))
 
                 if 'code' in data['data']:
