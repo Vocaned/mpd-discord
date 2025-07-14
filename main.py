@@ -20,7 +20,7 @@ class IPC(socket.socket):
         self.ipc_write(0, {'v': 1, 'client_id': self.CLIENT_ID})
         _, data = self.ipc_read()
         if not data or 'cmd' not in data or data['cmd'] != 'DISPATCH':
-            print(data)
+            print(data, file=sys.stderr)
             sys.exit()
         return data
 
@@ -80,7 +80,7 @@ def get_socket() -> IPC:
 
             raise RuntimeError
         except ConnectionRefusedError or RuntimeError:
-            print('Discord socket not running, trying again in 30 seconds')
+            print('Discord socket not running, trying again in 30 seconds', file=sys.stderr)
             time.sleep(30)
 
 def main():
@@ -128,7 +128,7 @@ def main():
                 }))
 
                 if 'code' in data['data']:
-                    print(data)
+                    print(data, file=sys.stderr)
 
                 time.sleep(5)
         except KeyboardInterrupt:
