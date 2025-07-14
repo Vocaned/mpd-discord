@@ -63,15 +63,20 @@ def run(*cmd: str) -> dict | None:
         return None # cmd returned nothing
     return json.loads(ret)
 
+SOCKET_DIRS = (
+    '.',
+    'app/com.discordapp.Discord/',
+    'snap.discord-canary/',
+    'snap.discord/'
+)
+
 def get_socket() -> IPC:
     while True:
         try:
-            p = Path(os.getenv('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}'))
-            for socket in p.glob('discord-ipc-*'):
-                return IPC(str(socket), CLIENT_ID)
-
-            for socket in p.glob('/app/com.discordapp.Discord/discord-ipc-*'):
-                return IPC(str(socket), CLIENT_ID)
+            p = Path(os.getenv('XDG_RUNTIME_DIR', '/tmp'))
+            for subdir in SOCKET_DIRS:
+                for socket in p.joinpath(subdir).glob('discord-ipc-*'):
+                    return IPC(str(socket), CLIENT_ID)
 
             raise RuntimeError
         except ConnectionRefusedError or RuntimeError:
