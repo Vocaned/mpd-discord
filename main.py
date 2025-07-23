@@ -14,20 +14,26 @@ class IPC(socket.socket):
     def __init__(self, socket_path: str, client_id: str) -> None:
         self.CLIENT_ID = client_id
         super().__init__(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.settimeout(5) # Timeout socket after 5 seconds
         self.connect(socket_path)
 
     def ipc_connect(self) -> dict:
         self.ipc_write(0, {'v': 1, 'client_id': self.CLIENT_ID})
         _, data = self.ipc_read()
         if not data or 'cmd' not in data or data['cmd'] != 'DISPATCH':
-            print(data, file=sys.stderr)
-            sys.exit()
+            raise ValueError(f'Encountered unexpected data when logging in, no clue what to do: {data}')
         return data
 
     def ipc_read(self) -> tuple[int, dict]:
         header = self.recv(8)
         op, length = struct.unpack('<II', header)
-        return (op, json.loads(self.recv(length)))
+        d = json.loads(self.recv(length))
+
+        if 'code' in d and d['code'] == 1000:
+            # Unknown error (typically user logout), assume connection is closed and reset socket
+            raise RuntimeError
+
+        return (op, d)
 
     def ipc_write(self, op: int, payload: dict) -> None:
         s = json.dumps(payload)
@@ -79,8 +85,8 @@ def get_socket() -> IPC:
                     return IPC(str(socket), CLIENT_ID)
 
             raise RuntimeError
-        except ConnectionRefusedError or RuntimeError:
-            print('Discord socket not running, trying again in 30 seconds', file=sys.stderr)
+        except (RuntimeError, ConnectionRefusedError, TimeoutError):
+            print('Could not connect to Discord socket, trying again in 30 seconds', file=sys.stderr)
             time.sleep(30)
 
 def main():
@@ -114,7 +120,7 @@ def main():
                 # Filter metadata to only use the first tag in case multiple are present
                 meta = {k: (lambda x: x[0] if isinstance(x, list) else x)(v) for k, v in meta.items()}
 
-                _, data = s.ipc_activity(clean_dict({
+                s.ipc_activity(clean_dict({
                     'status_display_type': 1,
                     'type': 2,
                     'flags': 1,
@@ -132,18 +138,16 @@ def main():
                         'large_url': f'https://musicbrainz.org/release/{meta["albumid"]}' if meta['albumid'] else None
                     }
                 }))
-
-                if 'code' in data['data']:
-                    print(data, file=sys.stderr)
-
                 time.sleep(5)
         except KeyboardInterrupt:
             s.ipc_close()
             sys.exit(0)
-        except BrokenPipeError:
-            # Restart the main loop
-            s.close()
-
+        except Exception as e:
+            print(f'Received {type(e).__name__}, closing socket and restarting', file=sys.stderr)
+            try:
+                s.close()
+            except:
+                pass
 
 
 if __name__ == '__main__':
