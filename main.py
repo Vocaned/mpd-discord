@@ -66,7 +66,7 @@ class MPD(socket.socket):
         self.connect(socket_path)
         self.versionstring = self.recv_until(b'\n')
 
-    def recv_until(self, terminator: bytes) -> str:
+    def recv_until(self, terminator: bytes) -> bytes:
         buffer = b''
         while True:
             data = self.recv(4096)
@@ -75,32 +75,22 @@ class MPD(socket.socket):
                 raise RuntimeError
             buffer += data
             if buffer.endswith(terminator) or b'\nACK' in buffer:
-                return buffer.decode()
+                return buffer
 
-    def send_command(self, command: bytes):
-        self.sendall(command + b'\n')
-        return self.recv_until(b'OK\n')
+    def query_command(self, command: str) -> dict:
+        out = {}
 
+        self.sendall(command.encode() + b'\n')
+        for line in self.recv_until(b'OK\n').decode().splitlines():
+            if ':' in line:
+                k,v = line.split(':', maxsplit=1)
+                out[k.strip().lower()] = v.strip()
+        return out
 
 def clean_dict(d):
     if isinstance(d, dict):
         return {k: clean_dict(v) for k, v in d.items() if v is not None}
     return d
-
-def query_mpd(cmd: str) -> dict:
-    out = {}
-    try:
-        with MPD(os.path.expandvars(MPD_SOCKET)) as mpd:
-            for line in mpd.send_command(cmd.encode()).splitlines():
-                if ':' in line:
-                    k,v = line.split(':', maxsplit=1)
-                    out[k.strip().lower()] = v.strip()
-    except (FileNotFoundError, ConnectionRefusedError, TimeoutError) as e:
-        print(f'Could not connect to mpd socket, trying again in 30 seconds', file=sys.stderr)
-        time.sleep(30)
-        raise e
-
-    return out
 
 SOCKET_DIRS = (
     '.',
@@ -110,28 +100,36 @@ SOCKET_DIRS = (
 )
 
 def get_discord() -> Discord:
-    while True:
-        try:
-            p = Path(os.getenv('XDG_RUNTIME_DIR', '/tmp'))
-            for subdir in SOCKET_DIRS:
-                for socket in p.joinpath(subdir).glob('discord-ipc-*'):
-                    return Discord(str(socket), CLIENT_ID)
+    try:
+        p = Path(os.getenv('XDG_RUNTIME_DIR', '/tmp'))
+        for subdir in SOCKET_DIRS:
+            for socket in p.joinpath(subdir).glob('discord-ipc-*'):
+                return Discord(str(socket), CLIENT_ID)
 
-            raise FileNotFoundError('Discord socket not found')
-        except (FileNotFoundError, ConnectionRefusedError, TimeoutError) as e:
-            print('Could not connect to Discord socket, trying again in 30 seconds', file=sys.stderr)
-            time.sleep(30)
-            raise e
+        raise FileNotFoundError('Discord socket not found')
+    except (FileNotFoundError, ConnectionRefusedError, TimeoutError) as e:
+        print('Could not connect to Discord socket, trying again in 30 seconds', file=sys.stderr)
+        time.sleep(30)
+        raise e
+
+def get_mpd() -> MPD:
+    try:
+        return MPD(os.path.expandvars(MPD_SOCKET))
+    except (FileNotFoundError, ConnectionRefusedError, TimeoutError) as e:
+        print(f'Could not connect to mpd socket, trying again in 30 seconds', file=sys.stderr)
+        time.sleep(30)
+        raise e
 
 def main():
     while True:
         d = get_discord()
+        mpd = get_mpd()
         try:
             d.ipc_connect()
 
             while True:
-                status = query_mpd('status')
-                song = query_mpd('currentsong')
+                status = mpd.query_command('status')
+                song = mpd.query_command('currentsong')
                 if not status or not song or status.get('state') != 'play' or not song:
                     d.ipc_activity(None)
                     time.sleep(5)
