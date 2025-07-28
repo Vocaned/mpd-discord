@@ -9,8 +9,9 @@ from pathlib import Path
 from uuid import uuid4
 
 CLIENT_ID = '1031137720317263873'
+MPD_SOCKET = '$XDG_RUNTIME_DIR/mpd.sock'
 
-class IPC(socket.socket):
+class Discord(socket.socket):
     def __init__(self, socket_path: str, client_id: str) -> None:
         self.CLIENT_ID = client_id
         super().__init__(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -38,7 +39,7 @@ class IPC(socket.socket):
     def ipc_write(self, op: int, payload: dict) -> None:
         s = json.dumps(payload)
         header = struct.pack('<II', op, len(s))
-        self.send(header + s.encode('utf-8'))
+        self.sendall(header + s.encode('utf-8'))
 
     def ipc_close(self) -> None:
         self.ipc_write(2, {'v': 1, 'client_id': self.CLIENT_ID})
@@ -58,16 +59,47 @@ class IPC(socket.socket):
         self.ipc_write(1, payload)
         return self.ipc_read()
 
+class MPD(socket.socket):
+    def __init__(self, socket_path: str) -> None:
+        super().__init__(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.settimeout(5)
+        self.connect(socket_path)
+        self.versionstring = self.recv_until(b'\n')
+
+    def recv_until(self, terminator: bytes) -> str:
+        buffer = b''
+        while True:
+            data = self.recv(4096)
+            if not data:
+                # Socket closed?
+                raise RuntimeError
+            buffer += data
+            if buffer.endswith(terminator) or b'\nACK' in buffer:
+                return buffer.decode()
+
+    def send_command(self, command: bytes):
+        self.sendall(command + b'\n')
+        return self.recv_until(b'OK\n')
+
+
 def clean_dict(d):
     if isinstance(d, dict):
         return {k: clean_dict(v) for k, v in d.items() if v is not None}
     return d
 
-def run(*cmd: str) -> dict | None:
-    ret = subprocess.run(cmd, encoding='utf-8', capture_output=True).stdout
-    if not ret.strip():
-        return None # cmd returned nothing
-    return json.loads(ret)
+def query_mpd(cmd: str) -> dict:
+    out = {}
+    try:
+        with MPD(os.path.expandvars(MPD_SOCKET)) as mpd:
+            for line in mpd.send_command(cmd.encode()).splitlines():
+                if ':' in line:
+                    k,v = line.split(':', maxsplit=1)
+                    out[k.strip().lower()] = v.strip()
+    except FileNotFoundError:
+        print(f'Could not find mpd socket at {os.path.expandvars(MPD_SOCKET)}', file=sys.stderr)
+        sys.exit(1)
+
+    return out
 
 SOCKET_DIRS = (
     '.',
@@ -76,13 +108,13 @@ SOCKET_DIRS = (
     'snap.discord/'
 )
 
-def get_socket() -> IPC:
+def get_discord() -> Discord:
     while True:
         try:
             p = Path(os.getenv('XDG_RUNTIME_DIR', '/tmp'))
             for subdir in SOCKET_DIRS:
                 for socket in p.joinpath(subdir).glob('discord-ipc-*'):
-                    return IPC(str(socket), CLIENT_ID)
+                    return Discord(str(socket), CLIENT_ID)
 
             raise RuntimeError
         except (RuntimeError, ConnectionRefusedError, TimeoutError):
@@ -91,36 +123,34 @@ def get_socket() -> IPC:
 
 def main():
     while True:
-        s = get_socket()
+        d = get_discord()
         try:
-            s.ipc_connect()
+            d.ipc_connect()
 
             while True:
-                status = run('rmpc', 'status')
-                song = run('rmpc', 'song')
-                if not status or not song or status.get('state') != 'Play' or not song.get('metadata'):
-                    s.ipc_activity(None)
+                status = query_mpd('status')
+                song = query_mpd('currentsong')
+                if not status or not song or status.get('state') != 'play' or not song:
+                    d.ipc_activity(None)
                     time.sleep(5)
                     continue
 
-                metadata = song['metadata']
-
-                time_start = int(time.time()) - int(status['elapsed']['secs'])
-                time_end = time_start + int(status['duration']['secs'])
+                time_start = time.time() - float(status['elapsed'])
+                time_end = time_start + float(status['duration'])
 
                 meta = {
-                    'artist': metadata.get('albumartist') or metadata.get('artist'),
-                    'artistid': metadata.get('musicbrainz_albumartistid') or metadata.get('musicbrainz_artistid'),
-                    'track': metadata.get('title'),
-                    'trackid': metadata.get('musicbrainz_trackid'),
-                    'album': metadata.get('album'),
-                    'albumid': metadata.get('musicbrainz_albumid'),
+                    'artist': song.get('artistsort') or song.get('artist'),
+                    'artistid': song.get('musicbrainz_albumartistid') or song.get('musicbrainz_artistid'),
+                    'track': song.get('title'),
+                    'trackid': song.get('musicbrainz_trackid'),
+                    'album': song.get('album'),
+                    'albumid': song.get('musicbrainz_albumid'),
                 }
 
                 # Filter metadata to only use the first tag in case multiple are present
                 meta = {k: (lambda x: x[0] if isinstance(x, list) else x)(v) for k, v in meta.items()}
 
-                s.ipc_activity(clean_dict({
+                d.ipc_activity(clean_dict({
                     'status_display_type': 1,
                     'type': 2,
                     'flags': 1,
@@ -129,8 +159,8 @@ def main():
                     'details': meta['track'],
                     'details_url': f'https://musicbrainz.org/track/{meta["trackid"]}' if meta['trackid'] else None,
                     'timestamps': {
-                        'start': time_start * 1000,
-                        'end': time_end * 1000
+                        'start': int(time_start) * 1000,
+                        'end': int(time_end) * 1000
                     },
                     'assets': {
                         'large_image': f'https://coverartarchive.org/release/{meta["albumid"]}/front' if meta['albumid'] else None,
@@ -140,15 +170,17 @@ def main():
                 }))
                 time.sleep(5)
         except KeyboardInterrupt:
-            s.ipc_close()
+            d.ipc_close()
             sys.exit(0)
         except Exception as e:
             print(f'Received {type(e).__name__}, closing socket and restarting', file=sys.stderr)
+            print(e, file=sys.stderr)
             try:
-                s.close()
+                d.close()
             except:
                 pass
 
 
 if __name__ == '__main__':
     main()
+
