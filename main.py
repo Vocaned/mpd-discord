@@ -31,7 +31,7 @@ class Discord(socket.socket):
 
         if 'code' in d and d['code'] == 1000:
             # Unknown error (typically user logout), assume connection is closed and reset socket
-            raise RuntimeError
+            raise RuntimeError(str(d))
 
         return (op, d)
 
@@ -95,9 +95,10 @@ def query_mpd(cmd: str) -> dict:
                 if ':' in line:
                     k,v = line.split(':', maxsplit=1)
                     out[k.strip().lower()] = v.strip()
-    except FileNotFoundError:
-        print(f'Could not find mpd socket at {os.path.expandvars(MPD_SOCKET)}', file=sys.stderr)
-        sys.exit(1)
+    except (FileNotFoundError, ConnectionRefusedError, TimeoutError) as e:
+        print(f'Could not connect to mpd socket, trying again in 30 seconds', file=sys.stderr)
+        time.sleep(30)
+        raise e
 
     return out
 
@@ -116,10 +117,11 @@ def get_discord() -> Discord:
                 for socket in p.joinpath(subdir).glob('discord-ipc-*'):
                     return Discord(str(socket), CLIENT_ID)
 
-            raise RuntimeError
-        except (RuntimeError, ConnectionRefusedError, TimeoutError):
+            raise FileNotFoundError('Discord socket not found')
+        except (FileNotFoundError, ConnectionRefusedError, TimeoutError) as e:
             print('Could not connect to Discord socket, trying again in 30 seconds', file=sys.stderr)
             time.sleep(30)
+            raise e
 
 def main():
     while True:
