@@ -4,7 +4,6 @@ import socket
 import struct
 import json
 import time
-import subprocess
 from pathlib import Path
 from uuid import uuid4
 
@@ -61,6 +60,7 @@ class Discord(socket.socket):
 
 class MPD(socket.socket):
     def __init__(self, socket_path: str) -> None:
+        # TODO: support tcp sockets
         super().__init__(socket.AF_UNIX, socket.SOCK_STREAM)
         self.settimeout(5)
         self.connect(socket_path)
