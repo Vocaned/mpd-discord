@@ -7,8 +7,8 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-CLIENT_ID = '1031137720317263873'
-MPD_SOCKET = '$XDG_RUNTIME_DIR/mpd.sock'
+CLIENT_ID = '1031137720317263873' # Discord application ID
+MPD_SOCKET = '$XDG_RUNTIME_DIR/mpd.sock' # MPD Unix socket path OR TCP [host]:[port]
 
 class Discord(socket.socket):
     def __init__(self, socket_path: str, client_id: str) -> None:
@@ -59,11 +59,30 @@ class Discord(socket.socket):
         return self.ipc_read()
 
 class MPD(socket.socket):
-    def __init__(self, socket_path: str) -> None:
-        # TODO: support tcp sockets
-        super().__init__(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.settimeout(5)
-        self.connect(socket_path)
+    def __init__(self, address: str) -> None:
+        # Support either a UNIX socket path or a TCP host:port string
+        # treat as TCP if the address contains a single trailing port part and no '/'
+        is_tcp_address = False
+        tcp_host: str | None = None
+        tcp_port: int | None = None
+
+        if ':' in address and '/' not in address:
+            potential_host, potential_port = address.rsplit(':', 1)
+            if potential_host and potential_port.isdigit():
+                is_tcp_address = True
+                tcp_host = potential_host
+                tcp_port = int(potential_port)
+
+        if is_tcp_address:
+            super().__init__(socket.AF_INET, socket.SOCK_STREAM)
+            self.settimeout(5)
+            assert tcp_host is not None and tcp_port is not None
+            self.connect((tcp_host, tcp_port))
+        else:
+            super().__init__(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.settimeout(5)
+            self.connect(address)
+
         self.versionstring = self.recv_until(b'\n')
 
     def recv_until(self, terminator: bytes) -> bytes:
