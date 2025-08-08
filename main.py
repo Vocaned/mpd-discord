@@ -84,7 +84,15 @@ class MPD(socket.socket):
         for line in self.recv_until(b'OK\n').decode().splitlines():
             if ':' in line:
                 k,v = line.split(':', maxsplit=1)
-                out[k.strip().lower()] = v.strip()
+                k = k.strip().lower()
+                v = v.strip()
+                if k in out:
+                    if isinstance(out[k], list):
+                        out[k].append(v)
+                    else:
+                        out[k] = [out[k], v]
+                else:
+                    out[k] = v
         return out
 
 def clean_dict(d):
@@ -138,9 +146,13 @@ def main():
                 time_start = time.time() - float(status['elapsed'])
                 time_end = time_start + float(status['duration'])
 
+                artist = song.get('artist')
+                if isinstance(artist, list):
+                    artist = ', '.join(artist[:-1]) + ' & ' + artist[-1]
+
                 meta = {
-                    'artist': song.get('artistsort') or song.get('artist'),
-                    'artistid': song.get('musicbrainz_albumartistid') or song.get('musicbrainz_artistid'),
+                    'artist': artist or song.get('artistsort') or song.get('artist'),
+                    'artistid': song.get('musicbrainz_artistid') or song.get('musicbrainz_albumartistid'),
                     'track': song.get('title'),
                     'trackid': song.get('musicbrainz_trackid'),
                     'album': song.get('album'),
