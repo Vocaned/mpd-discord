@@ -35,3 +35,4 @@ if input('[y/N] ').lower().strip() == 'y':
         f.write(service)
     print('Service file written.')
     subprocess.run(['systemctl', '--user', 'enable', '--now', 'mpd-discord'])
+    print('Service started.')
